@@ -550,28 +550,62 @@ public static class ServiceCollectionExtensions
         }
     }
 
-    public static IIdentityServerBuilder AddIdentityServerCertificate(
-        this IIdentityServerBuilder identityServerBuilder, IWebHostEnvironment env, GlobalSettings globalSettings)
+    public static IIdentityServerBuilder AddIdentityServerCertificate(this IIdentityServerBuilder builder,
+        IWebHostEnvironment env, GlobalSettings globalSettings)
     {
-        var certificate = CoreHelpers.GetIdentityServerCertificate(globalSettings);
-        if (certificate != null)
+        X509Certificate2 certificate = null;
+
+        if (globalSettings.SelfHosted)
         {
-            identityServerBuilder.AddSigningCredential(certificate);
+            Console.WriteLine("SelfHosted mode detected.");
+            Console.WriteLine($"Config Thumbprint: '{globalSettings.IdentityServer?.CertificateThumbprint}'");
+            Console.WriteLine($"Config Path: '{globalSettings.IdentityServer?.CertificatePath}'");
+
+            // Hardcode for testing
+            string certPath = "/home/auth/.bitwarden/identity.pfx";
+            if (File.Exists(certPath))
+            {
+                Console.WriteLine($"Loading certificate from hardcoded path: {certPath}");
+                try
+                {
+                    certificate = new X509Certificate2(certPath, (string)null);  // No password
+                    Console.WriteLine("Certificate loaded successfully.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to load certificate: {ex.Message}");
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(globalSettings.IdentityServer?.CertificateThumbprint))
+            {
+                Console.WriteLine($"Looking for certificate with thumbprint: {globalSettings.IdentityServer.CertificateThumbprint}");
+                certificate = CoreHelpers.GetCertificate(globalSettings.IdentityServer.CertificateThumbprint);
+                if (certificate == null) Console.WriteLine("Certificate not found in store.");
+            }
+            else
+            {
+                Console.WriteLine("Falling back to embedded certificate.");
+                try
+                {
+                    certificate = CoreHelpers.GetEmbeddedCertificateAsync(
+                        env.IsDevelopment() ? "identity_dev.pfx" : "identity.pfx", null).GetAwaiter().GetResult();
+                    Console.WriteLine("Embedded certificate loaded.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Embedded load failed: {ex.Message}");
+                }
+            }
         }
-        else if (env.IsDevelopment() && !string.IsNullOrEmpty(globalSettings.DevelopmentDirectory))
+
+        if (certificate == null)
         {
-            var developerSigningKeyPath = Path.Combine(globalSettings.DevelopmentDirectory, "signingkey.jwk");
-            identityServerBuilder.AddDeveloperSigningCredential(true, developerSigningKeyPath);
-        }
-        else if (env.IsDevelopment())
-        {
-            identityServerBuilder.AddDeveloperSigningCredential(false);
-        }
-        else
-        {
+            Console.WriteLine("No certificate loaded.");
             throw new Exception("No identity certificate to use.");
         }
-        return identityServerBuilder;
+
+        builder.AddSigningCredential(certificate);
+        return builder;
     }
 
     public static GlobalSettings AddGlobalSettingsServices(this IServiceCollection services,
@@ -787,6 +821,11 @@ public static class ServiceCollectionExtensions
         var selectedDatabaseProvider = globalSettings.DatabaseProvider;
         var provider = SupportedDatabaseProviders.SqlServer;
         var connectionString = string.Empty;
+        Console.WriteLine($"DatabaseProvider from GlobalSettings: '{selectedDatabaseProvider}'");
+        Console.WriteLine($"Sqlite.ConnectionString: '{globalSettings.Sqlite?.ConnectionString}'");
+        Console.WriteLine($"SqlServer.ConnectionString: '{globalSettings.SqlServer?.ConnectionString}'");
+
+
 
         if (!string.IsNullOrWhiteSpace(selectedDatabaseProvider))
         {
